@@ -5,15 +5,9 @@ import asyncio
 import nest_asyncio
 import json
 from langchain_core.callbacks import AsyncCallbackHandler
+from utils.event_loop import initialize_event_loop, ensure_event_loop
 
-# nest_asyncio 적용: 이미 실행 중인 이벤트 루프 내에서 중첩 호출 허용
-nest_asyncio.apply()
-
-# 전역 이벤트 루프 생성 및 재사용 (한번 생성한 후 계속 사용)
-if "event_loop" not in st.session_state:
-    loop = asyncio.new_event_loop()
-    st.session_state.event_loop = loop
-    asyncio.set_event_loop(loop)
+initialize_event_loop()
 
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
@@ -77,7 +71,7 @@ async def astream_graph(
 st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠", layout="wide")
 
 # 사이드바 최상단에 저자 정보 추가 (다른 사이드바 요소보다 먼저 배치)
-st.sidebar.markdown("### ✍️ Made by [테디노트](https://youtube.com/c/teddynote) 🚀")
+st.sidebar.markdown("### ✍️ Forked from [테디노트](https://youtube.com/c/teddynote) | Developed by [qhdrl12](https://github.com/qhdrl12)")
 st.sidebar.divider()  # 구분선 추가
 
 # 기존 페이지 타이틀 및 설명
@@ -210,6 +204,8 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
     사용자 질문을 처리하고 응답을 생성합니다.
     """
     try:
+        ensure_event_loop()
+
         if st.session_state.agent:
             # 새로운 콜백 핸들러 사용
             callback_handler = get_model_callback_handler(
@@ -264,11 +260,14 @@ async def initialize_session(mcp_config=None):
         bool: 초기화 성공 여부
     """
     try:
+        ensure_event_loop() 
+
         with st.spinner("🔄 MCP 서버에 연결 중..."):
             print("inner MCP 서버에 연결 중...")
             # 이전 MCP 클라이언트가 존재하면 먼저 정리
             if st.session_state.mcp_client:
                 try:
+                    print(f"기존 MCP 클라이언트 종료")
                     await st.session_state.mcp_client.__aexit__(None, None, None)
                 except:
                     pass
@@ -562,8 +561,6 @@ with st.sidebar:
             
             # 세션 초기화 준비
             st.session_state.session_initialized = False
-            st.session_state.agent = None
-            st.session_state.mcp_client = None
 
             print(f"st.session_state.pending_mcp_config: {st.session_state.pending_mcp_config}")
 
