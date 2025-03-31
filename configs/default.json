@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "weather": {
+      "url": "http://localhost:8000/sse",
+      "transport": "sse"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "transport": "stdio"
+    }
+  }
+}
