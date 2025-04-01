@@ -55,3 +55,7 @@ coverage.xml
 # Logs
 *.log
 logs/ 
+
+# test code
+test_weather_client.py
+test_weather_client_sse.py

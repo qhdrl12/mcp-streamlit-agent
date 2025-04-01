@@ -100,7 +100,6 @@ def print_message():
             with st.expander("🔧 도구 호출 정보", expanded=False):
                 st.markdown(message["content"])
 
-# 새로운 콜백 핸들러 클래스들은 utils/callbacks.py로 이동함
 
 # 기존 process_query 함수를 주석 처리하고 새로운 버전 추가
 async def process_query(query, text_placeholder, tool_placeholder, timeout_seconds=60):
@@ -153,79 +152,180 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
         return {"error": error_msg}, error_msg, ""
 
 
-async def initialize_session(mcp_config=None):
-    """
-    MCP 세션과 에이전트를 초기화합니다.
+def _create_agent_with_model(model_name: str, tools: List[Any]):
+    """Creates the specific LLM and the ReAct agent."""
+    prompt = "Use your tools to answer the question. Answer in Korean."
+    if model_name == "claude":
+        model = ChatAnthropic(
+            model="claude-3-5-haiku-20241022",
+            temperature=0.1,
+            max_tokens=8192
+        )
+    elif model_name == "openai":
+        model = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0.1,
+            max_tokens=4096
+        )
+    elif model_name == "gemini":
+        model = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            temperature=0.1,
+            max_tokens=8192
+        )
+    else:
+        # Default to Claude
+        model = ChatAnthropic(
+            model="claude-3-5-haiku-20241022",
+            temperature=0.1,
+            max_tokens=8192
+        )
+    
+    agent = create_react_agent(
+        model,
+        tools,
+        checkpointer=MemorySaver(),
+        prompt=prompt,
+    )
+    return agent
 
-    매개변수:
-        mcp_config: MCP 도구 설정 정보(JSON). None인 경우 기본 설정 사용
 
-    반환값:
-        bool: 초기화 성공 여부
+async def initialize_mcp_connection(mcp_config=None):
     """
+    Initializes the MCP client connection and retrieves tools.
+    Handles closing of the previous client.
+
+    Returns:
+        tuple(MultiServerMCPClient | None, List[Any] | None): 
+            A tuple containing the client and tools, or (None, None) on failure.
+    """
+    # Close previous client if exists
+    if st.session_state.mcp_client:
+        try:
+            print(f"기존 MCP 클라이언트 종료")
+            await st.session_state.mcp_client.__aexit__(None, None, None)
+            st.session_state.mcp_client = None # Clear reference after closing
+        except Exception as client_exit_e:
+            print(f"Error closing previous MCP client: {client_exit_e}") # Log error but continue
+            st.session_state.mcp_client = None # Attempt to clear reference even if close failed
+
+    # Create and enter new client
     try:
-        ensure_event_loop() 
-
         with st.spinner("🔄 MCP 서버에 연결 중..."):
             print("inner MCP 서버에 연결 중...")
-            # 이전 MCP 클라이언트가 존재하면 먼저 정리
-            if st.session_state.mcp_client:
-                try:
-                    print(f"기존 MCP 클라이언트 종료")
-                    await st.session_state.mcp_client.__aexit__(None, None, None)
-                except:
-                    pass
-
             client = MultiServerMCPClient(mcp_config)
             await client.__aenter__()
             tools = client.get_tools()
-            st.session_state.tool_count = len(tools)
-            st.session_state.mcp_client = client
-
-            # 선택된 모델에 따라 다른 LLM 초기화
-            selected_model = st.session_state.selected_model
-            
-            prompt = "Use your tools to answer the question. Answer in Korean."
-            if selected_model == "claude":
-                model = ChatAnthropic(
-                    model="claude-3-5-haiku-20241022", 
-                    temperature=0.1, 
-                    max_tokens=8192
-                )
-            elif selected_model == "openai":
-                model = ChatOpenAI(
-                    model="gpt-4o",
-                    temperature=0.1,
-                    max_tokens=4096
-                )
-            elif selected_model == "gemini":
-                model = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash",
-                    temperature=0.1,
-                    max_tokens=8192
-                )
-            else:
-                # 기본값은 Claude로 설정
-                model = ChatAnthropic(
-                    model="claude-3-5-haiku-20241022", 
-                    temperature=0.1, 
-                    max_tokens=8192
-                )
-            agent = create_react_agent(
-                model,
-                tools,
-                checkpointer=MemorySaver(),
-                prompt=prompt,
-            )
-            st.session_state.agent = agent
-            st.session_state.session_initialized = True
-            return True
+            print(f"MCP Connection successful, {len(tools)} tools retrieved.")
+            return client, tools # Return client and tools
     except Exception as e:
-        st.error(f"❌ 초기화 중 오류 발생: {str(e)}")
+        st.error(f"❌ MCP 클라이언트 연결 또는 도구 로딩 실패: {str(e)}")
         import traceback
-
         st.error(traceback.format_exc())
-        return False
+        return None, None # Indicate failure
+
+
+async def apply_and_reinitialize(config):
+    """
+    Applies the provided MCP configuration, re-initializes the MCP connection,
+    and recreates the agent. Handles status updates and errors.
+    """
+    apply_status = st.empty()
+    initialization_attempted = False # Flag to track if full init was attempted
+    success = False
+    try:
+        with apply_status.container():
+            st.warning("🔄 MCP 도구 설정을 적용하고 에이전트를 재구성합니다...")
+            progress_bar = st.progress(0)
+            progress_bar.progress(10)
+
+            # Clear old state
+            st.session_state.session_initialized = False
+            st.session_state.agent = None
+            st.session_state.tools = None
+            # st.session_state.mcp_client is handled within initialize_mcp_connection
+
+            print(f"Applying new MCP config: {config}")
+            initialization_attempted = True
+            
+            # Initialize MCP Connection
+            progress_bar.progress(30)
+            new_client, new_tools = await initialize_mcp_connection(config)
+            progress_bar.progress(60)
+
+            if new_client and new_tools:
+                st.session_state.mcp_client = new_client
+                st.session_state.tools = new_tools # Store tools
+                st.session_state.tool_count = len(new_tools)
+
+                try:
+                    # Create Agent using the current model selection
+                    selected_model_name = st.session_state.selected_model
+                    st.session_state.agent = _create_agent_with_model(selected_model_name, new_tools)
+                    st.session_state.session_initialized = True
+                    success = True
+                    progress_bar.progress(100)
+                    st.success("✅ MCP 도구 설정 적용 및 에이전트 재구성 완료.")
+                    await asyncio.sleep(2)
+                    apply_status.empty()
+                except Exception as agent_e:
+                    progress_bar.progress(100)
+                    st.error(f"❌ 에이전트 생성 중 오류 발생: {agent_e}")
+                    # Keep error message visible
+            else:
+                # initialize_mcp_connection already showed an error
+                progress_bar.progress(100)
+                st.error("❌ MCP 연결 또는 도구 로딩 실패로 에이전트를 생성할 수 없습니다.")
+                # Keep error message visible
+
+    except Exception as outer_e:
+        # Catch errors in the status display logic itself
+        st.error(f"❌ 재초기화 상태 업데이트 중 오류 발생: {str(outer_e)}")
+        # Attempt to clear any lingering status message if possible
+        try:
+            apply_status.empty()
+        except: pass # Ignore cleanup errors
+
+    # Rerun only if initialization was actually attempted and successful
+    if initialization_attempted and success:
+        st.rerun()
+    elif not success:
+         # Clear spinner/warning if it failed but didn't rerun
+         try: apply_status.empty()
+         except: pass
+
+
+async def recreate_agent_only():
+    """
+    Recreates the agent using the currently selected model and existing tools.
+    Assumes the MCP client connection is already valid.
+    """
+    
+    success = False
+    try:        
+        st.session_state.session_initialized = False # Mark as uninitialized during agent creation
+        st.session_state.agent = None # Clear old agent
+
+        selected_model_name = st.session_state.selected_model
+        tools = st.session_state.tools
+        new_agent = _create_agent_with_model(selected_model_name, tools)
+
+        st.session_state.agent = new_agent
+        st.session_state.session_initialized = True
+        success = True
+
+    except Exception as e:
+         st.error(f"❌ 에이전트 재구성 중 오류 발생: {e}")
+         import traceback
+         st.error(traceback.format_exc())
+         # Keep error message visible
+         st.session_state.session_initialized = False # Ensure state reflects failure
+
+    # Rerun only on success, show toast first
+    if success:
+        st.rerun()
+    else:
+        pass
 
 
 # --- 사이드바 UI: MCP 도구 추가 인터페이스로 변경 ---
@@ -355,17 +455,15 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
                             st.session_state.pending_mcp_config[tool_name] = tool_config
                             success_tools.append(tool_name)
 
-                    # 성공 메시지
+                    # 성공 메시지 대신 즉시 적용
                     if success_tools:
-                        if len(success_tools) == 1:
-                            st.success(
-                                f"{success_tools[0]} 도구가 추가되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
-                            )
-                        else:
-                            tool_names = ", ".join(success_tools)
-                            st.success(
-                                f"총 {len(success_tools)}개 도구({tool_names})가 추가되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
-                            )
+                        st.info(f"추가된 도구: {', '.join(success_tools)}. 변경사항 적용 중...")
+                        # Apply changes immediately
+                        st.session_state.event_loop.run_until_complete(
+                            apply_and_reinitialize(st.session_state.pending_mcp_config)
+                        )
+                        # Rerun happens inside apply_and_reinitialize on success
+
         except json.JSONDecodeError as e:
             st.error(f"JSON 파싱 에러: {e}")
             st.markdown(
@@ -402,12 +500,18 @@ with st.sidebar.expander("등록된 도구 목록", expanded=True):
             col1.markdown(f"- **{tool_name}**")
             if col2.button("삭제", key=f"delete_{tool_name}"):
                 # pending config에서 해당 도구 삭제 (즉시 적용되지는 않음)
+                tool_name_deleted = tool_name # Store name for message
                 del st.session_state.pending_mcp_config[tool_name]
-                st.success(
-                    f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
+                st.info(f"{tool_name_deleted} 도구가 삭제되었습니다. 변경사항 적용 중...")
+                # Apply changes immediately
+                st.session_state.event_loop.run_until_complete(
+                    apply_and_reinitialize(st.session_state.pending_mcp_config)
                 )
+                # Rerun happens inside apply_and_reinitialize on success
+
 
 with st.sidebar:
+
     # 모델 선택 UI 추가
     st.subheader("🚀 모델 선택")
     model_options = {
@@ -416,91 +520,38 @@ with st.sidebar:
         "gemini": "Gemini 1.5 Pro (Google)"
     }
     
+    # Get index of currently selected model, default to 0 if not found
+    current_model_key = st.session_state.selected_model
+    default_index = 0
+    model_keys = list(model_options.keys())
+    if current_model_key in model_keys:
+        default_index = model_keys.index(current_model_key)
+
     selected_model = st.selectbox(
         "LLM 모델을 선택하세요",
-        list(model_options.keys()),
+        model_keys,
         format_func=lambda x: model_options[x],
-        index=list(model_options.keys()).index(st.session_state.selected_model)
+        index=default_index
     )
     
-    # 선택된 모델이 변경되면 세션 상태 업데이트 및 재초기화
+    # 선택된 모델이 변경되면 에이전트만 재구성
     if selected_model != st.session_state.selected_model:
         st.session_state.selected_model = selected_model
-        st.session_state.session_initialized = False
-        st.session_state.agent = None
-        st.warning(f"모델이 변경되었습니다. 에이전트를 재초기화합니다.")
-        
-        # 초기화 실행
-        try:
-            success = st.session_state.event_loop.run_until_complete(
-                initialize_session(st.session_state.pending_mcp_config)
-            )
-            
-            if success:
-                st.success("✅ 새로운 모델 설정이 적용되었습니다.")
-            else:
-                st.error("❌ 새로운 모델 적용에 실패하였습니다.")
-        except Exception as e:
-            st.error(f"❌ 모델 변경 중 오류 발생: {str(e)}")
-            
-        st.rerun()  # 페이지 새로고침
-    
-    st.divider()
-    
-    # 적용하기 버튼: pending config를 실제 설정에 반영하고 세션 재초기화
-    if st.button(
-        "도구설정 적용하기",
-        key="apply_button",
-        type="primary",
-        use_container_width=True,
-    ):
-        # 적용 중 메시지 표시
-        apply_status = st.empty()
-        with apply_status.container():
-            st.warning("🔄 변경사항을 적용하고 있습니다. 잠시만 기다려주세요...")
-            progress_bar = st.progress(0)
-
-            # 진행 상태 업데이트
-            progress_bar.progress(30)
-            
-            # 세션 초기화 준비
-            st.session_state.session_initialized = False
-
-            print(f"st.session_state.pending_mcp_config: {st.session_state.pending_mcp_config}")
-
-            # 초기화 실행
-            try:
-                success = st.session_state.event_loop.run_until_complete(
-                    initialize_session(st.session_state.pending_mcp_config)
-                )
-                
-                # 진행 상태 업데이트
-                progress_bar.progress(100)
-
-                if success:
-                    st.success("✅ 새로운 MCP 도구 설정이 적용되었습니다.")
-                else:
-                    st.error("❌ 새로운 MCP 도구 설정 적용에 실패하였습니다.")
-            except Exception as e:
-                progress_bar.progress(100)
-                st.error(f"❌ 도구 설정 적용 중 오류 발생: {str(e)}")
-
-        # 페이지 새로고침
-        st.rerun()
+        # Call the function to recreate only the agent
+        st.session_state.event_loop.run_until_complete(
+            recreate_agent_only()
+        )
+        # Rerun is handled within recreate_agent_only on success
 
 
 # --- 기본 세션 초기화 (초기화되지 않은 경우) ---
 if not st.session_state.session_initialized:
-    st.info("🔄 MCP 서버와 에이전트를 초기화합니다. 잠시만 기다려주세요...")
-    success = st.session_state.event_loop.run_until_complete(
-        initialize_session(st.session_state.pending_mcp_config)
+    st.info("🔄 MCP 서버 연결 및 에이전트 초기화 중...")
+    # Use the full reinitialize function for the initial setup
+    st.session_state.event_loop.run_until_complete(
+        apply_and_reinitialize(st.session_state.pending_mcp_config)
     )
-    if success:
-        st.success(
-            f"✅ 초기화 완료! {st.session_state.tool_count}개의 도구가 로드되었습니다."
-        )
-    else:
-        st.error("❌ 초기화에 실패했습니다. 페이지를 새로고침해 주세요.")
+    # apply_and_reinitialize handles success/error messages and potential rerun
 
 
 # --- 대화 기록 출력 ---
@@ -557,14 +608,6 @@ with st.sidebar:
     st.subheader("🔧 시스템 정보")
     st.write(f"🛠️ MCP 도구 수: {st.session_state.get('tool_count', '초기화 중...')}")
     
-    # 현재 사용 중인 모델 표시
-    model_display_names = {
-        "claude": "Claude 3.5 Haiku (Anthropic)",
-        "openai": "GPT-4o (OpenAI)",
-        "gemini": "Gemini 1.5 Pro (Google)"
-    }
-    st.write(f"🚀 현재 모델: {model_display_names.get(st.session_state.selected_model, '알 수 없음')}")
-
     # 구분선 추가 (시각적 분리)
     st.divider()
 

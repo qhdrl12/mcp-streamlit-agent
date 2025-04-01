@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "weather": {
-      "url": "http://localhost:8000/sse",
-      "transport": "sse"
+      "command": "python",
+      "args": [
+        "adapters/weather_server.py"
+      ],
+      "transport": "stdio"
     },
     "playwright": {
       "command": "npx",
