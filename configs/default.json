@@ -3,7 +3,14 @@
     "weather": {
       "command": "python",
       "args": [
-        "adapters/weather_server.py"
+        "mcp_servers/weather_server.py"
+      ],
+      "transport": "stdio"
+    },
+    "simple_retriever": {
+      "command": "python",
+      "args": [
+        "mcp_servers/retriever_server.py"
       ],
       "transport": "stdio"
     },

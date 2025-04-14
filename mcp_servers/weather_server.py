@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 간단한 Weather MCP 서버 구현.
 지역에 대한 날씨 질문이 오면 항상 '맑음'으로 응답합니다.
@@ -27,18 +26,23 @@ def get_weather(location: str) -> Dict[str, Any]:
         "wind": "5m/s"
     }
 
-if __name__ == "__main__":
+def main():
+    """서버 실행을 위한 메인 함수"""
+    import argparse
     import sys
     
-    # 명령행 인수에 따라 transport 설정
-    transport = "stdio"  # 기본값
+    parser = argparse.ArgumentParser(description='Weather MCP Server')
+    parser.add_argument(
+        '--transport',
+        choices=['stdio', 'sse'],
+        default='stdio',
+        help='Transport method to use (stdio or sse)'
+    )
     
-    if len(sys.argv) > 1:
-        transport = sys.argv[1]
-    
-    print(f"Starting Weather MCP Server with transport: {transport}", file=sys.stderr)
-    
-    if transport == "sse":
-        mcp.run(transport="sse")
-    else:
-        mcp.run(transport="stdio") 
+    args = parser.parse_args()
+    print(f"Starting MCP Server with transport: {args.transport}", file=sys.stderr)
+    mcp.run(transport=args.transport) 
+
+
+if __name__ == "__main__":
+    main() 

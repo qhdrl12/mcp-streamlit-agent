@@ -22,7 +22,7 @@ from langchain_core.runnables import RunnableConfig
 # 환경 변수 로드 (.env 파일에서 API 키 등의 설정을 가져옴)
 load_dotenv(override=True)
 
-
+#TODO 검증 후 대체 필요
 async def astream_graph(
     graph: CompiledStateGraph,
     inputs: Dict[str, Any],
